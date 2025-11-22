@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Darwin - Preventive Healthcare & Longevity</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+    
+    <!-- Firebase SDK & App Logic --><script type="module">
+        // Use dynamic imports for Firebase so a network failure doesn't break the page.
+        let initializeApp, getFirestore, collection, addDoc, serverTimestamp, getAuth, signInAnonymously, signInWithCustomToken;
+
+        // 1. Initialize Firebase (safe guards when placeholders are missing)
+        let firebaseConfig = null;
+        let app = null;
+        let db = null;
+        let auth = null;
+        let appId = 'local';
+
+        try {
+            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                try {
+                    // Attempt to dynamically import Firebase modules. If these fail (offline), we'll continue without Firebase.
+                    const [appMod, fsMod, authMod] = await Promise.all([
+                        import('https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js'),
+                        import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js'),
+                        import('https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js')
+                    ]);
+
+                    initializeApp = appMod.initializeApp;
+                    getFirestore = fsMod.getFirestore;
+                    collection = fsMod.collection;
+                    addDoc = fsMod.addDoc;
+                    serverTimestamp = fsMod.serverTimestamp;
+                    getAuth = authMod.getAuth;
+                    signInAnonymously = authMod.signInAnonymously;
+                    signInWithCustomToken = authMod.signInWithCustomToken;
+
+                    firebaseConfig = JSON.parse(__firebase_config);
+                    app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                } catch (e) {
+                    console.error('Failed to dynamically import or initialize Firebase:', e);
+                    // Ensure firebase variables remain null so code falls back to local behaviour.
+                    initializeApp = null; getFirestore = null; collection = null; addDoc = null; serverTimestamp = null; getAuth = null; signInAnonymously = null; signInWithCustomToken = null;
+                }
+            } else {
+                console.warn('No __firebase_config provided — Firestore and Auth disabled.');
+            }
+        } catch (e) {
+            console.error('Firebase initialization error:', e);
+        }
+
+        if (typeof __app_id !== 'undefined' && __app_id) {
+            appId = __app_id;
+        }
+
+        // 2. Robust Authentication Handling
+        async function initAuth() {
+            try {
+                if (!auth) {
+                    console.warn('Auth not configured; skipping authentication.');
+                    return;
+                }
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                console.log("Firebase Auth successful.");
+            } catch (error) {
+                console.error("Authentication failed:", error);
+            }
+        }
+        initAuth();
+
+        // ==========================================
+        // GEMINI AI INTEGRATION
+        // ==========================================
+        const GEMINI_API_KEY = ""; // Injected by environment
+        const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+
+        async function callGemini(userPrompt) {
+            if (!GEMINI_API_KEY) {
+                console.warn('Gemini API key not provided — returning fallback response.');
+                return "AI unavailable in this environment — API key not configured.";
+            }
+            const systemPrompt = `You are Darwin, an expert preventive healthcare and longevity AI coach tailored for the Indian context. 
+            Your goal is to provide concise, scientifically-backed, and motivating advice on nutrition (Indian diet focus), sleep, exercise, and supplements.
+            Keep your answers short (under 3 sentences) and use emojis to be friendly.
+            
+            User Query: ${userPrompt}`;
+
+            const payload = {
+                contents: [{
+                    parts: [{ text: systemPrompt }]
+                }]
+            };
+
+            try {
+                // Implementing simple exponential backoff for resilience
+                let response;
+                let data;
+                for (let i = 0; i < 3; i++) {
+                    response = await fetch(GEMINI_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        data = await response.json();
+                        break;
+                    }
+
+                    if (i < 2) {
+                        await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+                    } else {
+                        throw new Error(`Failed to fetch content after ${i + 1} retries.`);
+                    }
+                }
+                
+                if (data && data.candidates && data.candidates[0].content) {
+                    return data.candidates[0].content.parts[0].text;
+                } else {
+                    throw new Error("No response from AI");
+                }
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                return "Oops! My neural networks are a bit tangled. Please try again shortly. 🧘‍♂️";
+            }
+        }
+
+        // 3. Expose Functions to Window (Global Scope)
+        
+        // --- AI Chat Logic ---
+        window.openAIModal = function() {
+            document.getElementById('ai-modal').classList.remove('hidden');
+            // Focus input
+            setTimeout(() => document.getElementById('ai-input').focus(), 100);
+        }
+
+        window.closeAIModal = function() {
+            document.getElementById('ai-modal').classList.add('hidden');
+        }
+
+        window.sendAIQuery = async function(queryOverride = null) {
+            const inputField = document.getElementById('ai-input');
+            const userQuery = queryOverride || inputField.value;
+            const chatContainer = document.getElementById('ai-chat-container');
+            const sendBtn = document.getElementById('ai-send-btn');
+
+            if (!userQuery.trim()) return;
+
+            // Disable UI
+            inputField.value = '';
+            inputField.disabled = true;
+            sendBtn.disabled = true;
+            
+            // 1. Add User Message
+            appendMessage('user', userQuery);
+
+            // 2. Add Loading State
+            const loadingId = appendMessage('ai', 'Thinking...', true);
+
+            // 3. Call Gemini
+            const aiResponse = await callGemini(userQuery);
+
+            // 4. Remove Loading & Add AI Response
+            removeMessage(loadingId);
+            appendMessage('ai', aiResponse);
+
+            // Re-enable UI
+            inputField.disabled = false;
+            sendBtn.disabled = false;
+            inputField.focus();
+        }
+
+        // Helper: Append Message to Chat
+        function appendMessage(sender, text, isLoading = false) {
+            const container = document.getElementById('ai-chat-container');
+            const div = document.createElement('div');
+            const id = 'msg-' + Date.now();
+            div.id = id;
+            
+            const alignClass = sender === 'user' ? 'justify-end' : 'justify-start';
+            const bgClass = sender === 'user' ? 'bg-darwin-blue text-white rounded-br-none' : 'bg-gray-100 text-gray-800 rounded-bl-none';
+            const loadingClass = isLoading ? 'animate-pulse italic text-gray-400' : '';
+
+            div.className = `flex ${alignClass} mb-3 fade-in-up`;
+            div.innerHTML = `
+                <div class="max-w-[80%] p-3 rounded-2xl ${bgClass} ${loadingClass} text-sm shadow-sm">
+                    ${text}
+                </div>
+            `;
+            
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+
+        function removeMessage(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        // Handle "Enter" key in chat
+        window.handleAIChatKey = function(e) {
+            if (e.key === 'Enter') window.sendAIQuery();
+        }
+
+
+        // --- Navigation Logic ---
+        window.navigateToSocial = function() {
+            document.getElementById('home-page').classList.add('hidden');
+            document.getElementById('social-page').classList.remove('hidden');
+            window.scrollTo(0,0);
+        }
+
+        window.navigateToHome = function() {
+            document.getElementById('social-page').classList.add('hidden');
+            document.getElementById('home-page').classList.remove('hidden');
+            window.scrollTo(0,0);
+        }
+
+        // --- Modal Logic ---
+        window.openModal = function() {
+            const modal = document.getElementById('waitlist-modal');
+            modal.classList.remove('hidden');
+            
+            // Reset form state
+            document.getElementById('modal-form').classList.remove('hidden');
+            document.getElementById('modal-success').classList.add('hidden');
+            document.getElementById('waitlist-form').reset();
+            document.getElementById('submit-btn').disabled = false;
+            document.getElementById('btn-text').classList.remove('hidden');
+            document.getElementById('btn-spinner').classList.add('hidden');
+        }
+
+        window.closeModal = function() {
+            document.getElementById('waitlist-modal').classList.add('hidden');
+        }
+
+        // --- Handle Form Submission ---
+        window.handleWaitlistSubmit = async function(event) {
+            event.preventDefault();
+            
+            // Check Auth - if it failed on startup, try again now.
+            // If auth/db are not configured, fall back to local storage so the form still works locally.
+            if (!auth || !db) {
+                const name = document.getElementById('name').value;
+                const mobile = document.getElementById('mobile').value;
+                if(!name || !mobile) {
+                    alert("Please fill in all details.");
+                    return;
+                }
+
+                const submitBtn = document.getElementById('submit-btn');
+                const btnText = document.getElementById('btn-text');
+                const btnSpinner = document.getElementById('btn-spinner');
+                submitBtn.disabled = true;
+                btnText.classList.add('hidden');
+                btnSpinner.classList.remove('hidden');
+
+                try {
+                    const lead = { name, mobile, timestamp: new Date().toISOString(), source: 'local-landing', userId: (auth && auth.currentUser) ? auth.currentUser.uid : null };
+                    const existing = JSON.parse(localStorage.getItem('darwin_waitlist') || '[]');
+                    existing.push(lead);
+                    localStorage.setItem('darwin_waitlist', JSON.stringify(existing));
+
+                    document.getElementById('modal-form').classList.add('hidden');
+                    document.getElementById('modal-success').classList.remove('hidden');
+                } catch (e) {
+                    console.error('Local save failed:', e);
+                    alert('Something went wrong. Please try again.');
+                    submitBtn.disabled = false;
+                    btnText.classList.remove('hidden');
+                    btnSpinner.classList.add('hidden');
+                }
+
+                return;
+            }
+
+            // At this point, db and auth exist — proceed with Firestore submission.
+            if (!auth.currentUser) {
+                alert("Connecting to secure server... Please try again in a moment.");
+                await initAuth(); // Try re-authenticating
+                if (!auth.currentUser) {
+                     alert("Authentication still failed. Please check your network or try refreshing the page.");
+                     return;
+                }
+            }
+
+            const name = document.getElementById('name').value;
+            const mobile = document.getElementById('mobile').value;
+            const submitBtn = document.getElementById('submit-btn');
+            const btnText = document.getElementById('btn-text');
+            const btnSpinner = document.getElementById('btn-spinner');
+
+            if(!name || !mobile) {
+                alert("Please fill in all details.");
+                return;
+            }
+
+            // Loading State
+            submitBtn.disabled = true;
+            btnText.classList.add('hidden');
+            btnSpinner.classList.remove('hidden');
+
+            try {
+                // Save to Firestore
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'waitlist_leads'), {
+                    name: name,
+                    mobile: mobile,
+                    timestamp: serverTimestamp(),
+                    source: 'landing_page',
+                    userId: auth.currentUser.uid // Track who submitted
+                });
+
+                // Show Success Animation
+                document.getElementById('modal-form').classList.add('hidden');
+                document.getElementById('modal-success').classList.remove('hidden');
+                
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                alert("Something went wrong. Please try again.");
+                submitBtn.disabled = false;
+                btnText.classList.remove('hidden');
+                btnSpinner.classList.add('hidden');
+            }
+        }
+    </script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        darwin: {
+                            blue: '#0d5eca',
+                            light: '#e1f3f9',
+                            dark: '#022e68',
+                            pale: '#e6eef9',
+                            grey: '#787b7f',
+                            teal: '#2A9D8F',
+                            orange: '#E76F51',
+                        }
+                    },
+                    boxShadow: {
+                        'glow': '0 0 50px -12px rgba(13, 94, 202, 0.5)',
+                        'card': '0 20px 40px -10px rgba(0, 0, 0, 0.1)',
+                        'hero-card': '0 25px 50px -12px rgba(13, 94, 202, 0.25)',
+                        'soft': '0 10px 30px -5px rgba(0, 0, 0, 0.08)',
+                    },
+                    animation: {
+                        'bounce-slow': 'bounce 3s infinite',
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+        }
+        
+        /* Smooth Fade In Animation */
+        .fade-in-up {
+            animation: fadeInUp 0.8s ease-out forwards;
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        
+        .delay-100 { animation-delay: 0.1s; }
+        .delay-200 { animation-delay: 0.2s; }
+        .delay-300 { animation-delay: 0.3s; }
+        
+        @keyframes fadeInUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Floating Animation */
+        .float-slow { animation: float 6s ease-in-out infinite; }
+        .float-medium { animation: float 5s ease-in-out infinite; }
+        .float-fast { animation: float 4s ease-in-out infinite; }
+
+        @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-15px); }
+            100% { transform: translateY(0px); }
+        }
+
+        /* Checkmark Animation */
+        .checkmark-circle {
+            stroke-dasharray: 166;
+            stroke-dashoffset: 166;
+            stroke-width: 2;
+            stroke-miterlimit: 10;
+            stroke: #4bb71b;
+            fill: none;
+            animation: stroke 0.6s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+        }
+        .checkmark {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            display: block;
+            stroke-width: 2;
+            stroke: #fff;
+            stroke-miterlimit: 10;
+            margin: 10% auto;
+            box-shadow: inset 0px 0px 0px 30px #4bb71b;
+            animation: fill .4s ease-in-out .4s forwards, scale .3s ease-in-out .9s both;
+        }
+        .checkmark-check {
+            transform-origin: 50% 50%;
+            stroke-dasharray: 48;
+            stroke-dashoffset: 48;
+            animation: stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.8s forwards;
+        }
+        @keyframes stroke {
+            100% { stroke-dashoffset: 0; }
+        }
+        @keyframes scale {
+            0%, 100% { transform: none; }
+            50% { transform: scale3d(1.1, 1.1, 1); }
+        }
+        @keyframes fill {
+            100% { box-shadow: inset 0px 0px 0px 30px #4bb71b; }
+        }
+
+        /* New Scanning Animation CSS */
+        @keyframes scan-grid-pulse {
+            0% { opacity: 0.1; }
+            50% { opacity: 0.25; }
+            100% { opacity: 0.1; }
+        }
+
+        .scan-grid {
+            position: absolute;
+            inset: 0;
+            background-image: 
+                linear-gradient(to right, rgba(13, 94, 202, 0.2) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(13, 94, 202, 0.2) 1px, transparent 1px);
+            background-size: 15% 100%, 100% 15%; /* 15% grid size */
+            opacity: 0.1;
+            animation: scan-grid-pulse 4s infinite;
+        }
+        
+        .scanning-container {
+            position: absolute;
+            inset: 0;
+            z-index: 30;
+            pointer-events: none;
+            overflow: hidden; /* Important for clipping the expanding target */
+            background-color: rgba(0, 0, 0, 0.4); /* Slightly darker overlay */
+            height: 100%; 
+        }
+        
+        /* NEW: Scanning Target Animation */
+        .scanning-target {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 50px; /* Initial size */
+            height: 50px; /* Initial size */
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            border-radius: 10px; /* Slightly rounded square */
+            transform: translate(-50%, -50%) scale(0.5) rotate(0deg);
+            opacity: 0;
+            animation: target-scan 3s ease-in-out infinite;
+            box-shadow: 0 0 20px rgba(13, 94, 202, 0.7); /* Subtle blue glow */
+        }
+
+        @keyframes target-scan {
+            0% {
+                transform: translate(-50%, -50%) scale(0.5) rotate(0deg);
+                opacity: 0;
+            }
+            20% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(0.8) rotate(10deg);
+            }
+            50% {
+                opacity: 0.7;
+                transform: translate(-50%, -50%) scale(1.2) rotate(20deg);
+            }
+            80% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(0.8) rotate(30deg);
+            }
+            100% {
+                transform: translate(-50%, -50%) scale(0.5) rotate(40deg);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+<body class="bg-white text-darwin-dark selection:bg-orange-200 selection:text-darwin-dark p-4 md:p-6">
+
+    <!-- ==========================================
+         PAGE 1: HOME / LANDING PAGE
+         ========================================== --><div id="home-page" class="relative w-full max-w-[1600px] mx-auto rounded-[2.5rem] md:rounded-[3.5rem] overflow-hidden bg-darwin-blue shadow-hero-card min-h-[calc(100vh-3rem)] md:min-h-[calc(100vh-3rem)] flex flex-col">
+        
+        <!-- Minimalist Background Gradient --><div class="absolute inset-0 bg-gradient-to-br from-[#0D5ECA] to-[#D5E9FF] z-0"></div>
+        
+        <!-- Navbar (Home) --><nav class="relative z-50 w-full px-6 py-8 lg:px-16 flex justify-between items-center max-w-7xl mx-auto">
+            <div class="flex items-center gap-2">
+                <div class="w-40 md:w-48">
+                    <!-- FIXED: Removed the onerror handler and the hidden fallback text -->
+                    <img src="Darwin Logo (4).png" alt="Darwin" class="w-full h-auto object-contain">
+                </div>
+            </div>
+
+            <!-- Nav Links --><div class="hidden md:flex items-center gap-8 bg-white/10 px-8 py-3 rounded-full backdrop-blur-sm border border-white/10">
+                <a href="#" onclick="navigateToSocial()" class="text-darwin-pale hover:text-white transition-colors font-medium flex items-center gap-2 group">
+                    <i class="fa-brands fa-instagram text-lg group-hover:scale-110 transition-transform"></i>
+                    <span class="text-sm">Instagram</span>
+                </a>
+                <a href="#" onclick="navigateToSocial()" class="text-darwin-pale hover:text-white transition-colors font-medium flex items-center gap-2 group">
+                    <i class="fa-brands fa-linkedin text-lg group-hover:scale-110 transition-transform"></i>
+                    <span class="text-sm">LinkedIn</span>
+                </a>
+                <a href="#" onclick="navigateToSocial()" class="text-darwin-pale hover:text-white transition-colors font-medium flex items-center gap-2 group">
+                    <i class="fa-brands fa-x-twitter text-lg group-hover:scale-110 transition-transform"></i>
+                    <span class="text-sm">X / Twitter</span>
+                </a>
+            </div>
+
+            <div class="hidden md:block">
+                <!-- Follow Us Button -> Goes to Page 2 --><button onclick="navigateToSocial()" class="bg-white text-darwin-blue font-bold py-3 px-6 rounded-full hover:bg-darwin-pale transition-colors shadow-lg">
+                    Follow Us
+                </button>
+            </div>
+            
+            <button class="md:hidden text-white text-2xl">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+        </nav>
+
+        <!-- Hero Content Section --><div class="relative z-10 flex flex-col lg:flex-row items-center justify-between max-w-7xl mx-auto px-6 lg:px-16 pt-6 pb-12 flex-grow w-full">
+            
+            <!-- Left Column: Text Content --><div class="w-full lg:w-1/2 text-center lg:text-left mb-16 lg:mb-0 lg:pr-12">
+                <div class="fade-in-up">
+                    <span class="inline-block py-1 px-3 rounded-full bg-white/20 text-darwin-light text-sm font-semibold mb-6 border border-white/20 backdrop-blur-md">
+                        <i class="fa-solid fa-heart-pulse mr-2"></i> Preventive Healthcare Revolution with AI
+                    </span>
+                </div>
+
+                <h1 class="text-4xl md:text-6xl lg:text-7xl font-extrabold text-white leading-tight mb-6 fade-in-up delay-100">
+                    Unlock your body's <br/>
+                    <span class="opacity-90">longevity potential.</span>
+                </h1>
+
+                <p class="text-lg md:text-xl text-darwin-pale mb-8 leading-relaxed max-w-2xl mx-auto lg:mx-0 fade-in-up delay-200 opacity-90">
+                    Deeply analyze your body markers. We suggest personalized improvements for your nutrition, sleep, and lifestyle to maximize your longevity.
+                </p>
+
+                <div class="flex flex-col sm:flex-row items-center gap-4 justify-center lg:justify-start fade-in-up delay-300">
+                    <!-- Updated Waitlist Button --><button onclick="openModal()" class="bg-gradient-to-r from-[#FF8A3C] to-[#FFD857] text-white font-medium text-lg py-4 px-10 rounded-full hover:opacity-90 transition-opacity w-full sm:w-auto flex items-center justify-center">
+                        Join Waitlist
+                    </button>
+                    <!-- Follow Us Button -> Goes to Page 2 --><button onclick="navigateToSocial()" class="bg-transparent border-2 border-white/30 text-white font-semibold py-4 px-8 rounded-full hover:bg-white/10 transition-colors w-full sm:w-auto backdrop-blur-sm">
+                        Follow Us
+                    </button>
+                </div>
+
+                <div class="mt-10 flex items-center justify-center lg:justify-start gap-4 fade-in-up delay-300">
+                    <div class="flex -space-x-3">
+                        <div class="w-10 h-10 rounded-full border-2 border-darwin-blue bg-gray-200 overflow-hidden">
+                            <img src="https://i.pravatar.cc/150?img=32" alt="User" class="w-full h-full object-cover">
+                        </div>
+                        <div class="w-10 h-10 rounded-full border-2 border-darwin-blue bg-gray-200 overflow-hidden">
+                            <img src="https://i.pravatar.cc/150?img=12" alt="User" class="w-full h-full object-cover">
+                        </div>
+                        <div class="w-10 h-10 rounded-full border-2 border-darwin-blue bg-gray-200 overflow-hidden">
+                            <img src="https://i.pravatar.cc/150?img=59" alt="User" class="w-full h-full object-cover">
+                        </div>
+                    </div>
+                    <div class="text-darwin-pale text-sm">
+                        <p class="font-semibold text-white">Join 2,000+ Pioneers</p>
+                        <p class="text-xs opacity-80">On the waiting list</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Mockup Container (now constrained) --><div class="w-full lg:w-1/2 relative flex justify-center lg:justify-end fade-in-up delay-200 max-w-lg mx-auto lg:mx-0">
+                
+                <!-- Background Glow --><div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-white opacity-10 rounded-full filter blur-[80px]"></div>
+
+                <!-- 1. The Phone - Realistic iPhone Mockup --><div class="relative z-20 w-[300px] md:w-[320px] h-[600px] md:h-[650px] mx-auto">
+                     <!-- iPhone Bezel --><div class="absolute inset-0 bg-[#1c1c1e] rounded-[50px] shadow-2xl border-[6px] border-[#3a3a3c]"></div>
+                     <!-- Screen --><div class="absolute top-3 left-3 right-3 bottom-3 bg-white rounded-[40px] overflow-hidden flex flex-col">
+                         
+                        <!-- Dynamic Island --><div class="absolute top-4 left-1/2 transform -translate-x-1/2 bg-black w-[90px] h-[25px] rounded-full z-50 flex items-center justify-center"></div>
+                        
+                        <!-- Screen Content --><div class="w-full h-full flex flex-col bg-gray-50 relative">
+                            <!-- Top Half: Indian Thali Image --><div class="h-[55%] w-full relative overflow-hidden">
+                                <!-- Scanning Effect (Z-index 30) --><div class="scanning-container">
+                                    <div class="scan-grid"></div>
+                                    <div class="scanning-target"></div> <!-- NEW SCANNING ELEMENT --><div class="absolute top-4 right-4 bg-darwin-blue/80 backdrop-blur-md text-white text-[10px] px-3 py-1.5 rounded-full font-bold flex items-center gap-2">
+                                        <i class="fa-solid fa-camera-retro animate-pulse"></i>
+                                        Analyzing...
+                                    </div>
+                                </div>
+                                
+                                 <img 
+                                    src="/workspaces/Darwin/64d26737b35f0c30ea2a5de4_North-Indian-thali-1024x683.png" 
+                                    onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1626074353765-517a681e40be?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';" 
+                                    alt="Healthy Indian Bowl" 
+                                    class="w-full h-full object-cover"
+                                 >
+                                 <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+                                 <div class="absolute top-12 left-6">
+                                     <span class="bg-white/20 backdrop-blur-md text-white text-xs px-3 py-1 rounded-full border border-white/30">Lunch</span>
+                                 </div>
+                            </div>
+
+                            <!-- Bottom Half: Sliding Up Nutrition Card (Z-index 40 - Above Scanner) --><div class="h-[50%] bg-white rounded-t-[2.5rem] -mt-12 relative z-40 p-6 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] flex flex-col">
+                                <div class="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mb-6"></div>
+                                <h3 class="text-lg font-bold text-gray-800 leading-tight mb-1">Homemade Thali Meal</h3>
+                                <p class="text-sm text-gray-500 mb-2">Dal Tadka, Roti, Sabzi & Salad</p>
+                                <p class="text-2xl font-extrabold text-darwin-blue mb-6">482 <span class="text-sm font-medium text-gray-400">Cal</span></p>
+                                <div class="grid grid-cols-4 gap-2 mb-6">
+                                    <div class="flex flex-col items-center">
+                                        <div class="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center text-orange-500 mb-2"><i class="fa-solid fa-dna"></i></div>
+                                        <p class="text-sm font-bold text-gray-800">18g</p><p class="text-[10px] text-gray-400">Proteins</p>
+                                    </div>
+                                    <div class="flex flex-col items-center">
+                                        <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500 mb-2"><i class="fa-solid fa-bread-slice"></i></div>
+                                        <p class="text-sm font-bold text-gray-800">65g</p><p class="text-[10px] text-gray-400">Carbs</p>
+                                    </div>
+                                    <div class="flex flex-col items-center">
+                                        <div class="w-10 h-10 rounded-xl bg-yellow-50 flex items-center justify-center text-yellow-500 mb-2"><i class="fa-solid fa-droplet"></i></div>
+                                        <p class="text-sm font-bold text-gray-800">14g</p><p class="text-[10px] text-gray-400">Fats</p>
+                                    </div>
+                                    <div class="flex flex-col items-center">
+                                        <div class="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-center text-green-500 mb-2"><i class="fa-solid fa-leaf"></i></div>
+                                        <p class="text-sm font-bold text-gray-800">8g</p><p class="text-[10px] text-gray-400">Fiber</p>
+                                    </div>
+                                </div>
+                                <div class="mt-auto flex items-center justify-center gap-2 text-gray-400 text-xs">
+                                    <i class="fa-solid fa-camera"></i> Tracked with Darwin Vision
+                                </div>
+                            </div>
+                        </div>
+                     </div>
+                     <!-- Side Buttons -->
+                     <div class="absolute top-24 -left-[2px] w-[2px] h-8 bg-gray-700 rounded-l"></div> <!-- Silent Switch -->
+                     <div class="absolute top-36 -left-[2px] w-[2px] h-16 bg-gray-700 rounded-l"></div> <!-- Volume Up -->
+                     <div class="absolute top-56 -left-[2px] w-[2px] h-16 bg-gray-700 rounded-l"></div> <!-- Volume Down -->
+                     <div class="absolute top-40 -right-[2px] w-[2px] h-20 bg-gray-700 rounded-r"></div> <!-- Power -->
+                </div>
+
+                <!-- Floating Chat Interface (Darwin AI) -->
+                <div class="absolute top-20 right-0 z-30 w-60 lg:w-64 flex flex-col gap-3">
+                    <div onclick="openAIModal(); sendAIQuery('Suggest high protein veg lunch')" class="bg-white p-3 rounded-2xl shadow-soft flex items-center gap-3 float-medium animate-delay-100 cursor-pointer hover:bg-orange-50 transition-colors">
+                        <div class="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center text-orange-500 text-xs"><i class="fa-solid fa-utensils"></i></div>
+                        <p class="text-xs font-medium text-gray-600">Suggest high protein veg lunch</p>
+                    </div>
+                    <div onclick="openAIModal(); sendAIQuery('How to improve sleep?')" class="bg-white p-3 rounded-2xl shadow-soft flex items-center gap-3 float-slow animate-delay-200 ml-4 cursor-pointer hover:bg-blue-50 transition-colors">
+                        <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-darwin-blue text-xs"><i class="fa-solid fa-moon"></i></div>
+                        <p class="text-xs font-medium text-gray-600">How to improve sleep?</p>
+                    </div>
+                    <div onclick="openAIModal()" class="bg-white rounded-2xl p-4 shadow-card mt-2 float-fast cursor-pointer hover:shadow-xl transition-shadow group">
+                        <div class="flex items-center gap-3 mb-3">
+                            <div class="w-10 h-10 rounded-xl bg-darwin-teal flex items-center justify-center text-white shadow-lg shadow-teal-200 group-hover:scale-110 transition-transform"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+                            <div><p class="text-sm font-bold text-gray-800">Darwin AI</p><p class="text-[10px] text-gray-400">Your Health Coach</p></div>
+                        </div>
+                        <p class="text-xs text-gray-600 mb-3 leading-relaxed">Ask me anything about your health, diet, or longevity goals! ✨</p>
+                        <div class="flex items-center justify-center w-full py-2 bg-darwin-light/50 rounded-lg text-darwin-blue text-xs font-bold">
+                            Try Darwin AI Now
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Floating Exercise Card -->
+                <div class="absolute bottom-20 left-0 z-30 w-56">
+                    <div class="bg-white p-4 rounded-2xl shadow-hero-card float-medium border border-white/50 backdrop-blur-sm">
+                        <div class="flex justify-between items-start mb-3">
+                             <div class="w-10 h-10 rounded-full bg-purple-50 flex items-center justify-center text-purple-500"><i class="fa-solid fa-person-praying"></i></div>
+                             <span class="bg-green-100 text-green-600 text-[10px] font-bold px-2 py-1 rounded-full">Active</span>
+                        </div>
+                        <h4 class="text-sm font-bold text-gray-800">Morning Yoga</h4>
+                        <p class="text-xs text-gray-500 mb-2">Surya Namaskar Sequence</p>
+                        <div class="w-full bg-gray-100 rounded-full h-1.5 mb-2"><div class="bg-purple-500 h-1.5 rounded-full" style="width: 70%"></div></div>
+                        <div class="flex justify-between text-[10px] text-gray-400"><span>20 mins</span><span>120 Cal</span></div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+        
+        <!-- Mobile Social Links Footer --><div class="md:hidden fixed bottom-0 left-0 w-full bg-white/10 backdrop-blur-md border-t border-white/10 p-4 flex justify-center gap-8 z-50">
+             <a href="#" class="text-white text-xl"><i class="fa-brands fa-instagram"></i></a>
+             <a href="#" class="text-white text-xl"><i class="fa-brands fa-linkedin"></i></a>
+             <a href="#" class="text-white text-xl"><i class="fa-brands fa-x-twitter"></i></a>
+        </div>
+
+        <!-- Floating AI Button (Bottom Right) --><button onclick="openAIModal()" class="fixed bottom-6 right-6 z-[60] bg-white text-darwin-blue font-bold py-3 px-5 rounded-full shadow-2xl hover:shadow-blue-500/30 hover:-translate-y-1 transition-all flex items-center gap-2 border border-white/50 animate-bounce-slow">
+            <div class="w-8 h-8 bg-darwin-blue rounded-full flex items-center justify-center text-white text-sm">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+            </div>
+            Ask Darwin AI
+        </button>
+
+    </div> <!-- End of Home Page -->
+
+
+    <!-- ==========================================
+         PAGE 2: SOCIAL HUB / FOLLOW US (Hidden by default)
+         ========================================== --><div id="social-page" class="hidden relative w-full max-w-[1600px] mx-auto rounded-[2.5rem] md:rounded-[3.5rem] overflow-hidden bg-darwin-blue shadow-hero-card min-h-[calc(100vh-3rem)] md:min-h-[calc(100vh-3rem)] flex flex-col">
+        
+        <!-- Minimalist Background Gradient --><div class="absolute inset-0 bg-gradient-to-br from-[#0D5ECA] to-[#D5E9FF] z-0"></div>
+
+        <!-- Navbar (Social) --><nav class="relative z-50 w-full px-6 py-8 lg:px-16 flex justify-between items-center max-w-7xl mx-auto">
+            <div class="flex items-center gap-2">
+                <div class="w-40 md:w-48 cursor-pointer" onclick="navigateToHome()">
+                    <!-- FIXED: Removed the hidden fallback text -->
+                    <img src="Darwin Logo (4).png" alt="Darwin" class="w-full h-auto object-contain">
+                </div>
+            </div>
+            <!-- Back Button --><div>
+                <button onclick="navigateToHome()" class="bg-white/10 border border-white/20 text-white font-medium py-2 px-6 rounded-full hover:bg-white/20 transition-colors flex items-center gap-2 backdrop-blur-sm">
+                    <i class="fa-solid fa-arrow-left"></i> Back to Home
+                </button>
+            </div>
+        </nav>
+
+        <!-- Social Content --><div class="relative z-10 flex flex-col items-center justify-center flex-grow w-full max-w-7xl mx-auto px-6 lg:px-16 py-12">
+            
+            <div class="text-center mb-12 fade-in-up">
+                <h2 class="text-4xl font-bold text-white mb-4">Join the Conversation</h2>
+                <p class="text-darwin-pale opacity-90 text-lg max-w-xl mx-auto">Catch our latest updates, health tips, and community stories on your favorite platforms.</p>
+            </div>
+            
+            <div class="grid md:grid-cols-3 gap-6 w-full fade-in-up delay-100">
+                <!-- LinkedIn Card --><div class="bg-white rounded-3xl p-6 shadow-xl transform hover:-translate-y-2 transition-transform duration-300">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 bg-[#0077b5] rounded-full flex items-center justify-center text-white shadow-md"><i class="fa-brands fa-linkedin-in"></i></div>
+                        <div><p class="font-bold text-gray-900 text-sm">Darwin Healthcare</p><p class="text-[10px] text-gray-500">2 hours ago</p></div>
+                        <i class="fa-solid fa-ellipsis text-gray-400 ml-auto cursor-pointer"></i>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-4 leading-relaxed">Excited to announce our new AI-driven longevity features! We are redefining preventive care for everyone. 🧬 <span class="text-[#0077b5]">#HealthTech #Startup</span></p>
+                    <div class="h-32 bg-gray-100 rounded-xl mb-4 overflow-hidden">
+                         <img src="https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=500&q=80" class="w-full h-full object-cover hover:scale-105 transition-transform">
+                    </div>
+                    <div class="flex items-center gap-5 text-gray-400 text-xs border-t border-gray-100 pt-4 font-medium">
+                        <span class="hover:text-[#0077b5] cursor-pointer transition-colors"><i class="fa-regular fa-thumbs-up mr-1"></i> 245</span>
+                        <span class="hover:text-[#0077b5] cursor-pointer transition-colors"><i class="fa-regular fa-comment mr-1"></i> 42</span>
+                        <span class="hover:text-[#0077b5] cursor-pointer transition-colors"><i class="fa-solid fa-share mr-1"></i> Share</span>
+                    </div>
+                </div>
+
+                <!-- X Card --><div class="bg-white rounded-3xl p-6 shadow-xl transform hover:-translate-y-2 transition-transform duration-300">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 bg-black rounded-full flex items-center justify-center text-white shadow-md"><i class="fa-brands fa-x-twitter"></i></div>
+                        <div><p class="font-bold text-gray-900 text-sm">Darwin <span class="text-gray-400 font-normal ml-1">@darwin_ai</span></p></div>
+                        <i class="fa-solid fa-ellipsis text-gray-400 ml-auto cursor-pointer"></i>
+                    </div>
+                    <p class="text-sm text-gray-800 mb-4 leading-relaxed">Did you know? Proper sleep consistency can improve your biological age by up to 3 years. 😴 <br><br>Track it now on Darwin.</p>
+                    <div class="flex items-center justify-between text-gray-400 text-xs mt-8 border-t border-gray-100 pt-4">
+                        <span class="hover:text-blue-400 cursor-pointer"><i class="fa-regular fa-comment"></i> 12</span>
+                        <span class="hover:text-green-500 cursor-pointer"><i class="fa-solid fa-retweet"></i> 5</span>
+                        <span class="hover:text-pink-500 cursor-pointer"><i class="fa-regular fa-heart"></i> 89</span>
+                        <span class="hover:text-blue-400 cursor-pointer"><i class="fa-solid fa-chart-simple"></i> 1.2k</span>
+                    </div>
+                </div>
+
+                <!-- Instagram Card --><div class="bg-white rounded-3xl p-6 shadow-xl transform hover:-translate-y-2 transition-transform duration-300">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-500 rounded-full flex items-center justify-center text-white shadow-md"><i class="fa-brands fa-instagram"></i></div>
+                        <div><p class="font-bold text-gray-900 text-sm">darwin.health</p><p class="text-[10px] text-gray-500">Mumbai, India</p></div>
+                        <i class="fa-solid fa-ellipsis text-gray-400 ml-auto cursor-pointer"></i>
+                    </div>
+                    <div class="aspect-square bg-gray-100 rounded-xl mb-4 overflow-hidden relative group cursor-pointer">
+                        <img src="64d26737b35f0c30ea2a5de4_North-Indian-thali-1024x683.jpg" 
+                             onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?ixlib=rb-4.0.3&auto=format&fit=crop&w=500&q=80';"
+                             class="w-full h-full object-cover">
+                         <div class="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-white gap-6 font-bold backdrop-blur-[2px]">
+                            <span><i class="fa-solid fa-heart"></i> 1.5k</span>
+                            <span><i class="fa-solid fa-comment"></i> 120</span>
+                         </div>
+                    </div>
+                    <p class="text-xs text-gray-600 line-clamp-2"><span class="font-bold text-gray-900 mr-1">darwin.health</span> Your plate is your medicine. We analyze every bite to ensure you hit your macro goals. 🥗 <span class="text-blue-600">#FoodAsMedicine #Thali</span></p>
+                </div>
+            </div>
+
+        </div>
+    </div> <!-- End of Social Page -->
+
+
+    <!-- ==========================================
+         MODAL: WAITLIST (Global)
+         ========================================== --><div id="waitlist-modal" class="fixed inset-0 z-[100] hidden">
+        <div class="absolute inset-0 bg-darwin-blue/40 backdrop-blur-sm transition-opacity" onclick="closeModal()"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-md px-4">
+            <div class="bg-white rounded-3xl shadow-2xl overflow-hidden relative border-2 border-white/50">
+                <button onclick="closeModal()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 z-10"><i class="fa-solid fa-xmark text-xl"></i></button>
+                
+                <div id="modal-form" class="p-8">
+                    <div class="text-center mb-6">
+                        <div class="w-12 h-12 bg-darwin-light rounded-full flex items-center justify-center text-darwin-blue text-xl mx-auto mb-3"><i class="fa-solid fa-star"></i></div>
+                        <h3 class="text-2xl font-bold text-darwin-dark mb-1">Join the Waitlist</h3>
+                        <p class="text-sm text-gray-500">Be the first to experience Darwin.</p>
+                    </div>
+                    <form id="waitlist-form" onsubmit="handleWaitlistSubmit(event)" class="space-y-4">
+                        <div><label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 ml-1">Full Name</label><input type="text" id="name" class="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-darwin-blue/20 focus:border-darwin-blue transition-all" placeholder="Enter your name" required></div>
+                        <div><label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 ml-1">Mobile Number</label><div class="relative"><span class="absolute left-4 top-3.5 text-gray-400 font-medium">+91</span><input type="tel" id="mobile" class="w-full bg-gray-50 border border-gray-200 rounded-xl pl-12 pr-4 py-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-darwin-blue/20 focus:border-darwin-blue transition-all" placeholder="00000 00000" required></div></div>
+                        <button type="submit" id="submit-btn" class="w-full bg-gradient-to-r from-[#FF8A3C] to-[#FFD857] text-white font-bold py-4 rounded-xl shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2 mt-4"><span id="btn-text">Get Early Access</span><span id="btn-spinner" class="hidden"><i class="fa-solid fa-circle-notch fa-spin"></i></span></button>
+                        <p class="text-center text-[10px] text-gray-400 mt-4">We respect your privacy. No spam, ever.</p>
+                    </form>
+                </div>
+
+                <div id="modal-success" class="hidden p-8 text-center">
+                    <div class="checkmark mb-6"><svg class="checkmark-circle" cx="26" cy="26" r="25" fill="none"/><path class="checkmark-check" fill="none" d="M14.1 27.2l7.1 7.2 16.7-16.8"/></div>
+                    <h3 class="text-2xl font-bold text-darwin-dark mb-2 animate-bounce-slow">Congratulations!</h3>
+                    <p class="text-gray-500 mb-6 leading-relaxed">You're officially on the Darwin list! <br>We are building something special to help you live longer and healthier.</p>
+                    <div class="bg-darwin-light p-4 rounded-xl mb-6"><p class="text-sm text-darwin-blue font-medium"><i class="fa-solid fa-envelope-open-text mr-1"></i> Keep an eye on your inbox!</p></div>
+                    <button onclick="closeModal()" class="w-full bg-gray-100 text-gray-600 font-bold py-3 rounded-xl hover:bg-gray-200 transition-colors">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         MODAL: DARWIN AI CHAT (New Feature)
+         ========================================== --><div id="ai-modal" class="fixed inset-0 z-[100] hidden">
+        <div class="absolute inset-0 bg-darwin-blue/60 backdrop-blur-md transition-opacity" onclick="closeAIModal()"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-lg px-4 h-[80vh] max-h-[700px] flex flex-col">
+            <div class="bg-white rounded-3xl shadow-2xl overflow-hidden relative border-2 border-white/50 w-full h-full flex flex-col">
+                
+                <!-- Header --><div class="bg-darwin-blue p-4 flex justify-between items-center text-white">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-lg">Darwin AI Coach</h3>
+                            <p class="text-xs opacity-80 text-green-300"><i class="fa-solid fa-circle text-[8px] mr-1"></i> Online</p>
+                        </div>
+                    </div>
+                    <button onclick="closeAIModal()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors">
+                        <i class="fa-solid fa-xmark text-xl"></i>
+                    </button>
+                </div>
+
+                <!-- Chat Area --><div id="ai-chat-container" class="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
+                    <!-- Welcome Message --><div class="flex justify-start mb-3 fade-in-up">
+                        <div class="max-w-[80%] p-3 rounded-2xl bg-white text-gray-800 rounded-bl-none text-sm shadow-sm border border-gray-100">
+                            Hi there! I'm Darwin. I can help you with nutrition plans, sleep tips, or exercise routines. What's on your mind? 🌱
+                        </div>
+                    </div>
+                    
+                    <!-- Quick Prompts --><div class="flex flex-wrap gap-2 mt-4">
+                        <button onclick="sendAIQuery('Give me a high protein vegetarian Indian breakfast idea')" class="bg-orange-50 text-orange-600 text-xs px-3 py-2 rounded-full hover:bg-orange-100 transition-colors border border-orange-100">🥗 High Protein Veg Breakfast</button>
+                        <button onclick="sendAIQuery('How to fix my sleep schedule?')" class="bg-blue-50 text-blue-600 text-xs px-3 py-2 rounded-full hover:bg-blue-100 transition-colors border border-blue-100">😴 Sleep Advice</button>
+                        <button onclick="sendAIQuery('5 minute desk exercise')" class="bg-purple-50 text-purple-600 text-xs px-3 py-2 rounded-full hover:bg-purple-100 transition-colors border border-purple-100">🧘 5-min Exercise</button>
+                    </div>
+                </div>
+
+                <!-- Input Area --><div class="p-4 bg-white border-t border-gray-100">
+                    <div class="flex items-center gap-2 bg-gray-100 rounded-full px-4 py-2 border border-gray-200 focus-within:border-darwin-blue focus-within:ring-1 focus-within:ring-darwin-blue transition-all">
+                        <input id="ai-input" type="text" class="flex-1 bg-transparent outline-none text-sm text-gray-700 placeholder-gray-400" placeholder="Ask Darwin anything..." onkeypress="handleAIChatKey(event)">
+                        <button id="ai-send-btn" onclick="sendAIQuery()" class="w-8 h-8 bg-darwin-blue text-white rounded-full flex items-center justify-center hover:bg-blue-700 transition-colors shadow-md">
+                            <i class="fa-solid fa-paper-plane text-xs"></i>
+                        </button>
+                    </div>
+                    <p class="text-[10px] text-center text-gray-400 mt-2">AI can make mistakes. Consult a doctor for medical advice.</p>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
